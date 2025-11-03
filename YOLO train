@@ -1,0 +1,40 @@
+# train_yolo.py
+from ultralytics import YOLO
+import os
+
+# --- COLE O SEU CÓDIGO DO ROBOFLOW AQUI ---
+# Substitua o bloco de exemplo abaixo pelo código que você copiou do label studio.
+# Este código irá descarregar o seu dataset na primeira vez que for executado.
+print("A descarregar o dataset do Labelstudio...")
+from roboflow import Roboflow
+rf = Roboflow(api_key="Qa12K12qNWWQtSZntIrZ")
+project = rf.workspace("fll-unearted").project("ras-yolo-jh6jf")
+version = project.version(1)
+dataset = version.download("yolov8-obb")
+# ----------------------------------------------
+
+if __name__ == '__main__':
+    # O caminho para o ficheiro de configuração do dataset (data.yaml)
+    # A variável 'dataset.location' do Roboflow já nos dá o caminho da pasta principal.
+    yaml_path = os.path.join(dataset.location, 'data.yaml')
+
+    if not os.path.exists(yaml_path):
+        print(f"ERRO: Ficheiro '{yaml_path}' não encontrado após o download.")
+        print("Verifique se colou o seu código do Roboflow corretamente no topo deste script.")
+    else:
+        # Carrega um modelo YOLOv8 pré-treinado para usar como base (transfer learning)
+        model = YOLO('yolov8n.pt')  # 'n' é o modelo mais pequeno e rápido
+
+        print("\n--- A INICIAR O TREINO DO MODELO YOLO PERSONALIZADO ---")
+
+        # Treina o modelo com o seu dataset
+        results = model.train(
+            data=yaml_path,  # Caminho para o ficheiro de configuração do seu dataset
+            epochs=100,  # Número de vezes que o modelo verá todas as imagens
+            imgsz=640,  # Redimensiona todas as imagens para 640x640 pixels
+            patience=10  # Para o treino mais cedo se a precisão não melhorar após 10 épocas
+        )
+
+        print("\n--- TREINO CONCLUÍDO! ---")
+        print(f"O seu modelo treinado foi salvo na pasta: {results.save_dir}")
+        print("O melhor modelo chama-se 'best.pt' e está dentro da subpasta 'weights'.")
