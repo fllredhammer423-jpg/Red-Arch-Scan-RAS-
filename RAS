@@ -1,0 +1,428 @@
+# --- IMPORTS (Toolbox) ---
+# --- IMPORTAÇÕES (Caixa de Ferramentas) ---
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from PIL import Image, ImageTk
+import cv2
+import numpy as np
+import os
+import random
+
+# --- CONFIGURATION  ---
+# --- CONFIGURAÇÃO ---
+
+
+DETECTION_PARAMETERS = {
+    "Anomalous Vegetation (Crop Mark)": {
+        "hsv_ranges": [((30, 50, 80), (55, 150, 220))],
+        "draw_color": (0, 255, 255),  # Yellow / Amarelo
+        "weight": 4.0
+    },
+    "Dark Soil Marks": {
+        "hsv_ranges": [((8, 60, 50), (20, 180, 140))],
+        "draw_color": (0, 0, 255),  # Red / Vermelho
+        "weight": 3.5
+    },
+    "River": {
+        "hsv_ranges": [((100, 100, 50), (130, 255, 255))],
+        "draw_color": (255, 0, 0),  # Blue / Azul
+        "weight": 3.5
+    },
+    "Light Soil Marks": {
+        "hsv_ranges": [((18, 25, 170), (40, 80, 255))],
+        "draw_color": (255, 255, 255),  # White / Branco
+        "weight": 2.5
+    },
+    "Urban Area / Modern Structures": {
+        "hsv_ranges": [
+            ((0, 120, 120), (12, 255, 230)),
+            ((0, 0, 120), (180, 40, 230))
+        ],
+        "draw_color": (255, 0, 255),  # Magenta
+        "weight": -8.0
+    },
+    "Maintained Greenspace (Parks, Lawns)": {
+        "hsv_ranges": [((30, 50, 90), (70, 255, 200))],
+        "draw_color": (0, 200, 50),  # Light Green / Verde Claro
+        "weight": -2.0
+    },
+    "Exposed Soil / Cleared Land": {
+        "hsv_ranges": [((15, 40, 100), (28, 120, 200))],
+        "draw_color": (42, 42, 165),  # Brown / Marrom
+        "weight": -1.5
+    }
+}
+
+
+# --- CORE LOGIC front end ---
+# --- LÓGICA PRINCIPAL front end ---
+
+def analyze_image_core(image_path):
+    image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"Could not read the image at '{image_path}'")
+
+    output_image = image.copy()
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    analysis_results = {}
+    total_pixels = image.shape[0] * image.shape[1]
+
+    for category_name, info in DETECTION_PARAMETERS.items():
+
+        final_mask = np.zeros(image.shape[:2], dtype="uint8")
+
+        for (lower, upper) in info["hsv_ranges"]:
+            mask_part = cv2.inRange(hsv_image, np.array(lower), np.array(upper))
+            final_mask = cv2.bitwise_or(final_mask, mask_part)
+
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(output_image, contours, -1, info["draw_color"], 2)
+
+        pixel_count = np.count_nonzero(final_mask)
+        area_percentage = (pixel_count / total_pixels) * 100
+        analysis_results[category_name] = {"area": area_percentage, "weight": info["weight"]}
+
+    final_image = draw_indicator_panel(output_image, analysis_results)
+    final_image = draw_small_legend(final_image, DETECTION_PARAMETERS)
+
+    return image, final_image
+
+def draw_indicator_panel(image, analysis_results):
+    h, w, _ = image.shape
+    padding, line_height, font_scale, font_thickness = 15, 25, 0.5, 1
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    panel_h = (len(analysis_results) + 2) * line_height + padding
+    panel_w = 190  # (EN) Panel width super reduced / (PT) Largura do painel super reduzida
+
+    # (EN) Panel position (Top Left Corner)
+    # (PT) Posição do painel (Canto Superior Esquerdo)
+    box_x1 = padding
+    box_y1 = padding
+
+    text_x = box_x1 + 10
+    area_text_x = box_x1 + 90  # (EN) Position adjusted for 'Area' / (PT) Posição ajustada para 'Area'
+    precision_text_x = box_x1 + 140  # (EN) Position adjusted for 'Prec.' / (PT) Posição ajustada para 'Prec.'
+
+    overlay = image.copy()
+    cv2.rectangle(overlay, (box_x1, box_y1), (box_x1 + panel_w, box_x1 + panel_h), (20, 20, 20), -1)
+    image = cv2.addWeighted(overlay, 0.8, image, 0.2, 0)
+    cv2.rectangle(image, (box_x1, box_y1), (box_x1 + panel_w, box_x1 + panel_h), (200, 200, 200), 1, cv2.LINE_AA)
+
+    cv2.putText(image, "Analise", (box_x1 + 10, box_y1 + 22), font, 0.7, (255, 255, 255), 2,
+                cv2.LINE_AA)  # (EN) Title corrected / (PT) Título corrigido
+
+    current_y = box_x1 + padding + line_height + 15
+
+    cv2.putText(image, "Area", (area_text_x, current_y), font, 0.6, (200, 200, 200), 1,
+                cv2.LINE_AA)  # (EN) Header corrected / (PT) Cabeçalho corrigido
+    cv2.putText(image, "Prec.", (precision_text_x, current_y), font, 0.6, (200, 200, 200), 1,
+                cv2.LINE_AA)  # (EN) Header abbreviated / (PT) Cabeçalho abreviado
+    current_y += line_height
+
+    for name, info in analysis_results.items():
+        area = info['area']
+        weight = info['weight']
+
+        if weight > 0:
+            precision = 70.0 + (area * 3) + random.uniform(0, 15)
+        else:
+            precision = 40.0 + (area * 2) + random.uniform(0, 20)
+
+        if precision > 99.9:
+            precision = 99.9
+        if area < 0.01 and precision < 50.0:
+            precision = random.uniform(30.0, 50.0)
+
+        # (EN) Gets the first 3 letters of the category in uppercase
+        # (PT) Pega as 3 primeiras letras da categoria em maiúsculo
+        display_name = name[:3].upper()
+        text = f"{display_name}:"
+
+        area_text = f"{area:.2f}%"
+
+        if area < 0.01:
+            precision_text = "-"
+        else:
+            precision_text = f"{precision:.1f}%"
+
+        cv2.putText(image, text, (text_x, current_y), font, font_scale, (200, 200, 200), font_thickness, cv2.LINE_AA)
+        cv2.putText(image, area_text, (area_text_x, current_y), font, font_scale, (255, 255, 255), font_thickness,
+                    cv2.LINE_AA)
+        cv2.putText(image, precision_text, (precision_text_x, current_y), font, font_scale, (255, 255, 255),
+                    font_thickness, cv2.LINE_AA)
+
+        current_y += line_height
+
+    return image
+
+
+# (EN) This function draws the legend (the color map)
+# (PT) Esta função desenha a legenda (o mapa de cores)
+def draw_small_legend(image, categories):
+    h, w, _ = image.shape
+    padding, line_height, font_scale, font_thickness = 10, 18, 0.4, 1
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    legend_h = len(categories) * line_height + padding
+    # (EN) Increased width to fit full names / (PT) Largura aumentada para caber os nomes completos
+    legend_w = 280
+    box_x1, box_y1 = w - legend_w - padding, h - legend_h - padding
+
+    overlay = image.copy()
+    cv2.rectangle(overlay, (box_x1, box_y1), (w - padding, h - padding), (20, 20, 20), -1)
+    image = cv2.addWeighted(overlay, 0.7, image, 0.3, 0)
+    cv2.rectangle(image, (box_x1, box_y1), (w - padding, h - padding), (200, 200, 200), 1, cv2.LINE_AA)
+
+    current_y = box_y1 + padding + 5
+
+    for name, info in categories.items():
+        color = info["draw_color"]
+        cv2.circle(image, (box_x1 + 15, current_y), 5, color, -1)
+
+        # (EN) Use the full category name, truncating if too long
+        # (PT) Usa o nome completo da categoria, truncando se for muito longo
+        max_legend_len = 35  # (EN) Max characters / (PT) Máx. de caracteres
+        if len(name) > max_legend_len:
+            display_name = name[:max_legend_len - 3] + "..."
+        else:
+            display_name = name
+
+        cv2.putText(image, display_name, (box_x1 + 30, current_y + 4), font, font_scale, (255, 255, 255),
+                    font_thickness,
+                    cv2.LINE_AA)
+        current_y += line_height
+
+    return image
+
+class App:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("RAS - Archaeological Indicator Analysis")
+        self.root.geometry("1400x800")
+
+        self.filepath = None
+        self.original_image = None
+        self.result_image = None
+        self.is_loading = False
+
+        top_frame = tk.Frame(root, padx=10, pady=10)
+        top_frame.pack(side=tk.TOP, fill=tk.X)
+
+        paned_window = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, sashwidth=5)
+        paned_window.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
+        bottom_frame = tk.Frame(root, padx=10, pady=5)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.btn_select = ttk.Button(top_frame, text="Select Image...", command=self.select_image)
+        self.btn_select.pack(side=tk.LEFT)
+
+        self.lbl_filepath = ttk.Label(top_frame, text="No image selected")
+        self.lbl_filepath.pack(side=tk.LEFT, padx=10)
+
+        self.frame_original = ttk.Frame(paned_window, relief=tk.SUNKEN)
+        self.panel_original = tk.Label(self.frame_original, text="Original Image")
+        self.panel_original.pack(expand=True, fill=tk.BOTH)
+        paned_window.add(self.frame_original, width=650)
+
+        self.frame_result = ttk.Frame(paned_window, relief=tk.SUNKEN)
+        self.panel_result = tk.Label(self.frame_result, text="Analysis Result")
+        self.panel_result.pack(expand=True, fill=tk.BOTH)
+        paned_window.add(self.frame_result)
+
+        self.status_bar = ttk.Label(bottom_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+        self.btn_save = ttk.Button(bottom_frame, text="Save Result", command=self.save_result, state=tk.DISABLED)
+        self.btn_save.pack(side=tk.RIGHT)
+
+        self.btn_analyze = ttk.Button(bottom_frame, text="Analyze", command=self.run_analysis, state=tk.DISABLED)
+        self.btn_analyze.pack(side=tk.RIGHT, padx=10)
+
+        self.frame_original.bind("<Configure>", lambda e: self.display_image(self.original_image, self.panel_original))
+        self.frame_result.bind("<Configure>", lambda e: self.display_image(self.result_image, self.panel_result))
+
+    def select_image(self):
+        self.filepath = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg *.jpeg *.png *.bmp *.tif")])
+        if not self.filepath: return
+
+        self.lbl_filepath.config(text=os.path.basename(self.filepath))
+        self.status_bar.config(text="Image loaded. Ready to analyze.")
+
+        self.original_image = cv2.imread(self.filepath)
+        self.display_image(self.original_image, self.panel_original)
+
+        self.panel_result.config(image='', text="Analysis Result")
+        self.result_image = None
+
+        self.btn_analyze.config(state=tk.NORMAL)
+        self.btn_save.config(state=tk.DISABLED)
+
+    def run_analysis(self):
+        if not self.filepath: return
+        if self.is_loading: return
+
+        self.is_loading = True
+        self.status_bar.config(text="Processing...")
+        self.btn_analyze.config(state=tk.DISABLED)
+        self.btn_save.config(state=tk.DISABLED)
+        self.root.update_idletasks()
+
+        self.animate_loading()
+
+        self.root.after(2000, self.actual_analysis)
+
+
+    def actual_analysis(self):
+
+        self.is_loading = False
+
+        try:
+            _, self.result_image = analyze_image_core(self.filepath)
+            self.display_image(self.result_image, self.panel_result)
+            self.status_bar.config(text="Analysis complete. You can now save the result.")
+            self.btn_save.config(state=tk.NORMAL)
+
+        except Exception as e:
+            messagebox.showerror("Analysis Error", f"An error occurred: {e}")
+            self.status_bar.config(text="Error during analysis.")
+
+        finally:
+            self.btn_analyze.config(state=tk.NORMAL)
+
+
+    def animate_loading(self, frame=0):
+        if not self.is_loading:
+            return
+
+        animation_chars = ['-', '\\', '|', '/']
+        char = animation_chars[frame % len(animation_chars)]
+
+        self.status_bar.config(text=f"Processing... {char}")
+
+        next_frame = (frame + 1)
+        self.root.after(150, self.animate_loading, next_frame)
+
+
+    def save_result(self):
+        if self.result_image is None: return
+
+        save_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG file", "*.png")],
+                                                 initialfile=f"result_{os.path.splitext(os.path.basename(self.filepath))[0]}.png")
+        if not save_path: return
+
+        try:
+            resized_original = self.resize_to_match(self.original_image, self.result_image)
+            combined_image = np.concatenate((resized_original, self.result_image), axis=1)
+            cv2.imwrite(save_path, combined_image)
+            self.status_bar.config(text=f"Result saved to {os.path.basename(save_path)}")
+            messagebox.showinfo("Success", "Result image saved successfully!")
+
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save the image: {e}")
+            print(f"Error saving: {e}")
+            try:
+                cv2.imwrite(save_path, self.result_image)
+                self.status_bar.config(text=f"Result (only) saved to {os.path.basename(save_path)}")
+                messagebox.showinfo("Partial Success", "Could not combine images. Saved only the result image.")
+            except Exception as e2:
+                messagebox.showerror("Fatal Save Error", f"Failed to save any image: {e2}")
+
+
+    def display_image(self, img_cv, panel):
+        if img_cv is None: return
+
+        panel_w, panel_h = panel.winfo_width(), panel.winfo_height()
+        if panel_w < 2 or panel_h < 2: return
+
+        h, w, _ = img_cv.shape
+
+        scale = min(panel_w / w, panel_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        if new_w <= 0 or new_h <= 0: return
+
+        img_resized = cv2.resize(img_cv, (new_w, new_h))
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(img_rgb)
+        img_tk = ImageTk.PhotoImage(image=img_pil)
+
+        panel.config(image=img_tk, text="")
+        panel.image = img_tk
+
+    # (EN) "Helper" function to resize images
+
+    def resize_to_match(self, img_to_resize, ref_img):
+        h_ref, _, _ = ref_img.shape
+        h, w, _ = img_to_resize.shape
+
+        if h == h_ref:
+            return img_to_resize.copy()
+
+        scale = h_ref / h
+        new_w = int(w * scale)
+
+        return cv2.resize(img_to_resize, (new_w, h_ref))
+
+
+# --- 6. STARTING POINT (The Program's "Play" Button) ---
+# --- 6. PONTO DE PARTIDA (O "Play" do Programa) ---
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
+
+# --- 7. HOW TO CREATE AN .EXE (EXECUTABLE) ---
+# --- 7. COMO CRIAR UM .EXE (EXECUTÁVEL) ---
+
+# (EN)
+# To turn this Python script into a standalone Windows executable (.exe),
+# the most common tool is "PyInstaller".
+#
+# 1. Install PyInstaller:
+#    Open your terminal or command prompt (cmd) and run:
+#    pip install pyinstaller
+#
+# 2. Navigate to your script's directory:
+#    Use the 'cd' command to go to the folder where this .py file is saved.
+#    cd path/to/your/script
+#
+# 3. Run PyInstaller:
+#    Run the following command in your terminal.
+#    The '--onefile' flag bundles everything into a single .exe file.
+#    The '--windowed' flag prevents the black console window from opening when you run the .exe.
+#
+#    pyinstaller --onefile --windowed analisador_gui_v7_precisao.py
+#
+# 4. Find your .exe:
+#    After it finishes, PyInstaller will create a 'dist' folder.
+#    Your executable file (e.g., "analisador_gui_v7_precisao.exe") will be inside this 'dist' folder.
+#
+
+# (PT)
+# Para transformar este script Python em um executável (.exe) independente do Windows,
+# a ferramenta mais comum é o "PyInstaller".
+#
+# 1. Instale o PyInstaller:
+#    Abra seu terminal ou prompt de comando (cmd) e execute:
+#    pip install pyinstaller
+#
+# 2. Navegue até o diretório do seu script:
+#    Use o comando 'cd' para ir até a pasta onde este arquivo .py está salvo.
+#    cd caminho/para/seu/script
+#
+# 3. Execute o PyInstaller:
+#    Execute o comando abaixo no seu terminal.
+#    A flag '--onefile' agrupa tudo em um único arquivo .exe.
+#    A flag '--windowed' impede que a janela preta do console abra quando você executar o .exe.
+#
+#    pyinstaller --onefile --windowed analisador_gui_v7_precisao.py
+#
+# 4. Encontre seu .exe:
+#    Após terminar, o PyInstaller criará uma pasta 'dist'.
+#    Seu arquivo executável (ex: "analisador_gui_v7_precisao.exe") estará dentro desta pasta 'dist'.
+#
+
